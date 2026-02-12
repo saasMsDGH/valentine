@@ -88,6 +88,8 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
       containers:
         - name: frontend
           image: ${IMAGE_FRONTEND}
