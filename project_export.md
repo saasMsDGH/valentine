@@ -1,6 +1,6 @@
 # Export de projet
 
-_Généré le 2026-02-12T21:36:27+01:00_
+_Généré le 2026-02-12T22:43:47+01:00_
 
 ## .github/workflows/build.yml
 
@@ -21,12 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Extraire la version depuis le tag (v1.0.0 → 1.0.0)
       - name: Extract version from tag
         id: version
+        shell: bash
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -34,9 +34,6 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # ===============================
-      # BACKEND
-      # ===============================
       - name: Build & Push Backend
         uses: docker/build-push-action@v5
         with:
@@ -46,9 +43,6 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/valentine-backend:${{ steps.version.outputs.VERSION }}
 
-      # ===============================
-      # FRONTEND
-      # ===============================
       - name: Build & Push Frontend
         uses: docker/build-push-action@v5
         with:
@@ -58,7 +52,6 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/valentine-frontend:${{ steps.version.outputs.VERSION }}
 
-      # Release GitHub
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -85,77 +78,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # important pour récupérer tags/refs
+          fetch-depth: 0
 
       - name: Resolve tag (v*) from triggering SHA
         id: resolve
         shell: bash
         run: |
           set -euo pipefail
-
           SHA="${{ github.event.workflow_run.head_sha }}"
-          echo "Triggering SHA: $SHA"
-
-          # On s'assure d'avoir les tags
           git fetch --force --tags
-
           TAG="$(git tag --points-at "$SHA" | grep -E '^v[0-9]+' | head -n 1 || true)"
           if [[ -z "$TAG" ]]; then
-            echo "❌ Aucun tag v* ne pointe vers ce commit ($SHA)."
-            echo "Tags points-at:"
-            git tag --points-at "$SHA" || true
+            echo "❌ Aucun tag v* ne pointe vers $SHA"
             exit 1
           fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-          VERSION="${TAG#v}"
-          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
-          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
-
-          echo "✅ Tag: $TAG"
-          echo "✅ Version: $VERSION"
-
-      - name: Deploy to K3s (apps namespace)
+      - name: Deploy (single manifest)
         env:
-          DOCKER_USER: ${{ secrets.DOCKER_USERNAME }}
-          VERSION: ${{ steps.resolve.outputs.VERSION }}
-
-          # Images (tag-only, pas de latest)
           IMAGE_BACKEND: ${{ secrets.DOCKER_USERNAME }}/valentine-backend:${{ steps.resolve.outputs.VERSION }}
           IMAGE_FRONTEND: ${{ secrets.DOCKER_USERNAME }}/valentine-frontend:${{ steps.resolve.outputs.VERSION }}
-
-          K8S_NAMESPACE: apps
         shell: bash
         run: |
           set -euo pipefail
+          echo "🚀 Deploy v${{ steps.resolve.outputs.VERSION }}"
+          echo "  backend : $IMAGE_BACKEND"
+          echo "  frontend: $IMAGE_FRONTEND"
 
-          echo "🚀 Déploiement Valentine v$VERSION sur K3s..."
-          echo "  - backend : $IMAGE_BACKEND"
-          echo "  - frontend: $IMAGE_FRONTEND"
+          # Render sans modifier le repo
+          envsubst < k8s/valentine.yaml > /tmp/valentine.rendered.yaml
 
-          # Namespace idempotent
-          kubectl create namespace "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -f /tmp/valentine.rendered.yaml
 
-          # Rendu des manifests sans modifier le repo
-          rm -rf /tmp/k8s-rendered
-          mkdir -p /tmp/k8s-rendered
+          # Rollouts (namespace inclus dans le manifest)
+          kubectl rollout status -n apps deployment/valentine-backend
+          kubectl rollout status -n apps deployment/valentine-frontend
 
-          # Hypothèse: tu as des manifests séparés:
-          # k8s/backend/*.yaml et k8s/frontend/*.yaml (ou équivalent)
-          # Ils doivent contenir des placeholders: ${IMAGE_BACKEND} / ${IMAGE_FRONTEND}
-          find k8s -type f -name '*.yaml' -print0 | while IFS= read -r -d '' f; do
-            out="/tmp/k8s-rendered/${f#k8s/}"
-            mkdir -p "$(dirname "$out")"
-            envsubst < "$f" > "$out"
-          done
-
-          # Apply
-          kubectl apply -n "$K8S_NAMESPACE" -f /tmp/k8s-rendered
-
-          # Rollouts (adapte les noms si besoin)
-          kubectl rollout status -n "$K8S_NAMESPACE" deployment/valentine-backend
-          kubectl rollout status -n "$K8S_NAMESPACE" deployment/valentine-frontend
-
-          echo "✅ Déploiement OK : Valentine v$VERSION"
+          echo "✅ OK"
 
 ```
 
@@ -211,8 +170,90 @@ jobs:
       - name: Verify Monorepo Build
         run: pnpm -r build
 
-      - name: Docker Dry Run (Unified Image)
-        run: docker build -f Dockerfile . # Teste le build réel
+      - name: Docker Dry Run (Backend)
+        run: docker build -f backend/Dockerfile backend
+
+      - name: Docker Dry Run (Frontend)
+        run: docker build -f frontend/Dockerfile frontend
+
+```
+
+## .gitignore
+
+```text
+# =========================
+# OS / Editors
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# =========================
+# Logs / temp
+# =========================
+*.log
+logs/
+tmp/
+temp/
+.cache/
+.nyc_output/
+
+# =========================
+# Env / secrets
+# =========================
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.p12
+
+# =========================
+# Node / JS (global)
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+dist/
+build/
+out/
+coverage/
+
+# =========================
+# Angular
+# =========================
+frontend/.angular/
+frontend/.cache/
+frontend/dist/
+frontend/node_modules/
+
+# =========================
+# Backend (Node)
+# =========================
+backend/node_modules/
+backend/dist/
+backend/coverage/
+backend/data/          # ton fallback submissions.json (runtime), pas en git
+
+# =========================
+# Docker
+# =========================
+**/*docker-compose.override*.yml
+
+# =========================
+# Kubernetes rendered
+# =========================
+*.rendered.yaml
+k8s/rendered/
+
 ```
 
 ## README.md
@@ -342,45 +383,49 @@ data/
 ## backend/Dockerfile
 
 ```text
-# Build stage (install production deps only, cache package install)
-FROM node:20-alpine AS deps
+# syntax=docker/dockerfile:1
+
+############################
+# 1) deps (prod only)
+############################
+FROM node:24-alpine AS deps
 WORKDIR /app
 
-# copy package files first to leverage layer cache
-COPY package.json package-lock.json* ./
-# install only production deps (faster, smaller)
-ENV NODE_ENV=production
-RUN npm ci --omit=dev --no-audit --no-fund
+# Copie minimale pour maximiser le cache
+COPY package.json package-lock.json ./
 
-# Runtime stage (non-root, minimal)
-FROM node:20-alpine AS runtime
+# Installe uniquement les deps prod
+RUN npm ci --omit=dev --no-audit --no-fund \
+  && npm cache clean --force
+
+############################
+# 2) runtime
+############################
+FROM node:24-alpine AS runtime
 WORKDIR /app
 
-# create non-root user for security
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-# copy only what's needed from deps stage
-COPY --from=deps /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=deps /usr/local/bin /usr/local/bin
-
-# Copy app source (only what's required)
-COPY src/ ./src/
-COPY package.json ./
-
-# ensure production NODE_ENV (use runtime override if needed)
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# set permissions
-RUN chown -R appuser:appgroup /app
+# User non-root avec UID/GID fixes (K8s-friendly)
+RUN addgroup -g 10001 -S appgroup \
+ && adduser  -u 10001 -S appuser -G appgroup
 
-USER appuser
+# Copier deps + code
+COPY --from=deps /app/node_modules ./node_modules
+COPY src ./src
+COPY package.json ./
+
+# Permissions
+RUN chown -R 10001:10001 /app
+
+USER 10001:10001
 
 EXPOSE 3000
 
-# simple healthcheck (works in docker / k8s probing can override)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
-  CMD wget -qO- --timeout=2 http://127.0.0.1:3000/api/health || exit 1
+# Healthcheck léger (wget présent sur alpine via busybox)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- --timeout=2 http://127.0.0.1:${PORT}/api/health || exit 1
 
 CMD ["node", "src/index.js"]
 
@@ -1773,41 +1818,46 @@ dist/
 ## frontend/Dockerfile
 
 ```text
-# Build stage
-FROM node:20-alpine AS build
+# syntax=docker/dockerfile:1
+
+############################
+# 1) Build Angular
+############################
+FROM node:24-alpine AS build
 WORKDIR /app
 
-# speed up npm install with only lock + package
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-# copy source and build
 COPY . .
-# build in production config; adjust if your angular.json target is different
-ARG NG_ENV=production
-ENV NODE_ENV=production
-RUN npm run build:prod
+# Ajuste si ton script build diffère
+RUN npm run build
 
-# Production stage: nginx
-FROM nginx:stable-alpine AS production
-# create nginx user-owned dir and remove default html to ensure clean image
-RUN rm -rf /usr/share/nginx/html/*
+############################
+# 2) Runtime Nginx non-root
+############################
+FROM nginx:alpine AS runtime
 
-# copy custom nginx config (expect frontend/nginx.conf in repo)
+# user non-root fixe 10001 (K8s-friendly)
+RUN addgroup -g 10001 -S appgroup \
+ && adduser  -u 10001 -S appuser -G appgroup \
+ && mkdir -p /var/cache/nginx /var/run \
+ && chown -R 10001:10001 /var/cache/nginx /var/run /etc/nginx /usr/share/nginx/html
+
+# Copie du build Angular (⚠️ ajuste dist/<APP_NAME>)
+# Exemple si ton build sort dans dist/frontend
+# COPY --from=build /app/dist/frontend/ /usr/share/nginx/html/
+# Exemple Angular classique: dist/<project-name>/
+COPY --from=build /app/dist/ /usr/share/nginx/html/
+
+# Conf nginx valide
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# copy built files from build stage
-COPY --from=build /app/dist/valentine /usr/share/nginx/html
+USER 10001:10001
+EXPOSE 8080
 
-# set non-root nginx if required (alpine nginx runs as nginx user by default)
-EXPOSE 80
-
-# lightweight healthcheck: / (index) must exist
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
-  CMD wget -qO- --timeout=2 http://127.0.0.1/ || exit 1
-
-# prefer to run nginx in foreground (default for this image)
-CMD ["nginx", "-g", "daemon off;"]
+# ✅ bypass l'entrypoint nginx officiel (qui tente de modifier default.conf)
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
 
 ```
 
@@ -1898,7 +1948,8 @@ server {
     # --- Ne JAMAIS cacher index.html (évite clients bloqués sur une vieille version) ---
     location = /index.html {
         add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate" always;
-
+        try_files $uri $uri/ /index.html;
+    }
 ```
 
 ## frontend/package-lock.json
@@ -11409,39 +11460,65 @@ h2 {
 
 ```
 
-## k8s/deployment.yaml
+## k8s/valentine.yaml
 
 ```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: valentine
+  name: valentine-backend
   namespace: apps
   labels:
-    app: valentine
+    app: valentine-backend
 spec:
-  replicas: 1 
+  replicas: 1
   selector:
     matchLabels:
-      app: valentine
+      app: valentine-backend
   template:
     metadata:
       labels:
-        app: valentine
+        app: valentine-backend
     spec:
+      terminationGracePeriodSeconds: 20
       securityContext:
+        runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
-        fsGroup: 10001 # <--- K3s applique un chown 10001 sur le volume au montage
+        fsGroup: 10001
       containers:
-        - name: server
-          image: DOCKER_IMAGE_PLACEHOLDER # Assure-toi de pousser l'image sur ton registry OVH
+        - name: backend
+          image: ${IMAGE_BACKEND}
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8080
+            - containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
           env:
             - name: PORT
-              value: "8080"
+              value: "3000"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
           resources:
             limits:
               cpu: "500m"
@@ -11449,59 +11526,122 @@ spec:
             requests:
               cpu: "100m"
               memory: "128Mi"
-
-```
-
-## k8s/ingress.yaml
-
-```yaml
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: valentine
-  namespace: apps
-spec:
-  entryPoints:
-    - websecure
-  routes:
-    # Domaine nu
-    - match: Host(`valentine.dgsynthex.online`) && PathPrefix(`/`)
-      kind: Rule
-      services:
-        - name: valentine-service
-          port: 80
-
-    # Wildcard
-    - match: HostRegexp(`{subdomain:.+}.valentine.dgsynthex.online`) && PathPrefix(`/`)
-      kind: Rule
-      services:
-        - name: valentine-service
-          port: 80
-
-  tls:
-    certResolver: le
-    domains:
-      - main: valentine.dgsynthex.online
-        sans:
-          - "*.valentine.dgsynthex.online"
-
-```
-
-## k8s/service.yaml
-
-```yaml
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: valentine-service
+  name: valentine-backend
   namespace: apps
 spec:
   selector:
-    app: valentine
+    app: valentine-backend
   ports:
     - name: http
+      port: 3000
+      targetPort: 3000
       protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valentine-frontend
+  namespace: apps
+  labels:
+    app: valentine-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: valentine-frontend
+  template:
+    metadata:
+      labels:
+        app: valentine-frontend
+    spec:
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: frontend
+          image: ${IMAGE_FRONTEND}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            # ⚠️ Mets true uniquement si ton image nginx ne tente pas d'écrire dans /etc/nginx/*
+            # et que tu as prévu des volumes writable pour cache/temp.
+            readOnlyRootFilesystem: false
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valentine-frontend
+  namespace: apps
+spec:
+  selector:
+    app: valentine-frontend
+  ports:
+    - name: http
       port: 80
       targetPort: 8080
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: valentine
+  namespace: apps
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: "le"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: valentine.dgsynthex.online
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: valentine-backend
+                port:
+                  number: 3000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: valentine-frontend
+                port:
+                  number: 80
+
 ```
 
