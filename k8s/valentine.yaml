@@ -21,7 +21,9 @@ spec:
         app: valentine-backend
     spec:
       securityContext:
-        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
         - name: backend
           image: ${IMAGE_BACKEND}
@@ -83,7 +85,9 @@ spec:
         app: valentine-frontend
     spec:
       securityContext:
-        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
         - name: frontend
           image: ${IMAGE_FRONTEND}
