@@ -1,0 +1,3 @@
+project_export.md
+*.svg
+*.log

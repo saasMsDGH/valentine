@@ -1,0 +1,52 @@
+name: Deploy to K3s
+
+on:
+  workflow_run:
+    workflows: ["Build & Release (Tag Only)"]
+    types: [completed]
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, k8s-deploy]
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag (v*) from triggering SHA
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          git fetch --force --tags
+          TAG="$(git tag --points-at "$SHA" | grep -E '^v[0-9]+' | head -n 1 || true)"
+          if [[ -z "$TAG" ]]; then
+            echo "❌ Aucun tag v* ne pointe vers $SHA"
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy (single manifest)
+        env:
+          IMAGE_BACKEND: ${{ secrets.DOCKER_USERNAME }}/valentine-backend:${{ steps.resolve.outputs.VERSION }}
+          IMAGE_FRONTEND: ${{ secrets.DOCKER_USERNAME }}/valentine-frontend:${{ steps.resolve.outputs.VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🚀 Deploy v${{ steps.resolve.outputs.VERSION }}"
+          echo "  backend : $IMAGE_BACKEND"
+          echo "  frontend: $IMAGE_FRONTEND"
+
+          # Render sans modifier le repo
+          envsubst < k8s/valentine.yaml > /tmp/valentine.rendered.yaml
+
+          kubectl apply -f /tmp/valentine.rendered.yaml
+
+          # Rollouts (namespace inclus dans le manifest)
+          kubectl rollout status -n apps deployment/valentine-backend
+          kubectl rollout status -n apps deployment/valentine-frontend
+
+          echo "✅ OK"
