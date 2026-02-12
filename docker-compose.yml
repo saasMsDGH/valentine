@@ -2,14 +2,14 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "80:80"
+      - "80:8080"
     depends_on:
       - api
 
   api:
     build: ./backend
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - PORT=3000
       - MONGO_URI=mongodb://mongo:27017/valentine
