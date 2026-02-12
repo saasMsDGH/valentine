@@ -104,8 +104,6 @@ spec:
             - containerPort: 8080
           securityContext:
             allowPrivilegeEscalation: false
-            # ⚠️ Mets true uniquement si ton image nginx ne tente pas d'écrire dans /etc/nginx/*
-            # et que tu as prévu des volumes writable pour cache/temp.
             readOnlyRootFilesystem: false
           readinessProbe:
             httpGet:
@@ -144,34 +142,3 @@ spec:
       port: 80
       targetPort: 8080
       protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: valentine
-  namespace: apps
-  annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.certresolver: "le"
-spec:
-  ingressClassName: traefik
-  rules:
-    - host: "*.valentine.dgsynthex.online"
-      http:
-        paths:
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: valentine-backend
-                port:
-                  number: 3000
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: valentine-frontend
-                port:
-                  number: 80
-
