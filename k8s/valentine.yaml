@@ -157,7 +157,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: valentine.dgsynthex.online
+    - host: "*.valentine.dgsynthex.online"
       http:
         paths:
           - path: /api
@@ -174,3 +174,4 @@ spec:
                 name: valentine-frontend
                 port:
                   number: 80
+
