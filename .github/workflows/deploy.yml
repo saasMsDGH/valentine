@@ -42,8 +42,9 @@ jobs:
 
           # Render sans modifier le repo
           envsubst < k8s/valentine.yaml > /tmp/valentine.rendered.yaml
+          envsubst < k8s/valentine-ingressroute.yaml > /tmp/valentine-ingressroute.rendered.yaml
 
-          kubectl apply -f /tmp/valentine.rendered.yaml
+          kubectl apply -f /tmp
 
           # Rollouts (namespace inclus dans le manifest)
           kubectl rollout status -n apps deployment/valentine-backend
