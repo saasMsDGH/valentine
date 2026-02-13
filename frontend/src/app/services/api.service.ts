@@ -22,6 +22,7 @@ export class ApiService {
   readonly contractData = signal<ContractData | null>(null);
   readonly signatureData = signal<string>('');
   readonly submitted = signal(false);
+  readonly submissionId = signal<string>('');
 
   setContract(data: ContractData): void {
     this.contractData.set(data);
@@ -29,6 +30,10 @@ export class ApiService {
 
   setSignature(data: string): void {
     this.signatureData.set(data);
+  }
+
+  setSubmissionId(id: string): void {
+    this.submissionId.set(id);
   }
 
   submit() {

@@ -1,6 +1,7 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, OnInit } from '@angular/core';
 import { Router } from '@angular/router';
 import { TenantService } from '../services/tenant.service';
+import { QuizService } from '../services/quiz.service';
 
 @Component({
   selector: 'app-landing',
@@ -61,9 +62,14 @@ import { TenantService } from '../services/tenant.service';
     }
   `,
 })
-export class LandingComponent {
+export class LandingComponent implements OnInit {
   tenant = inject(TenantService);
   private router = inject(Router);
+  private quiz = inject(QuizService);
+
+  ngOnInit(): void {
+    this.quiz.loadCustomQuestions();
+  }
 
   start(): void {
     this.router.navigate(['/quiz']);

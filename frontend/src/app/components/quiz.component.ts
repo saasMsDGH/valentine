@@ -28,7 +28,7 @@ import { BureauRefusComponent } from './bureau-refus.component';
             </div>
 
             <span class="question-number">
-              Question {{ quiz.currentIndex() + 1 }} / {{ quiz.questions.length }}
+              Question {{ quiz.currentIndex() + 1 }} / {{ quiz.questions().length }}
             </span>
 
             <!-- Speech bubble with question text -->

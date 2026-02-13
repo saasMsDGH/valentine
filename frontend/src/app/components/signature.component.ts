@@ -223,8 +223,9 @@ export class SignatureComponent implements AfterViewInit {
     this.submitting.set(true);
 
     this.api.submit().subscribe({
-      next: () => {
+      next: (response) => {
         this.api.submitted.set(true);
+        this.api.setSubmissionId(response.id);
         this.router.navigate(['/done']);
       },
       error: () => {
