@@ -70,3 +70,5 @@ backend/data/          # ton fallback submissions.json (runtime), pas en git
 # =========================
 *.rendered.yaml
 k8s/rendered/
+
+project_export.*

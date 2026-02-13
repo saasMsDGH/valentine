@@ -15,7 +15,7 @@ export const QUESTIONS: Question[] = [
   {
     id: 'q1',
     variants: [
-      { text: "Madame/Monsieur {prenom}, acceptez-vous de recevoir un peu trop d'amour aujourd'hui ?" },
+      { text: "Madame {prenom}, acceptez-vous de recevoir un peu trop d'amour aujourd'hui ?" },
       { text: "D'accord… acceptez-vous au moins un échantillon gratuit d'amour (30 sec, sans engagement) ?" },
       { text: "Très bien. L'amour sera livré en mode discret. Vous acceptez ?" },
       {
