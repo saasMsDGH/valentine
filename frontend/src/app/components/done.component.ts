@@ -69,11 +69,11 @@ import { ApiService } from '../services/api.service';
           }
 
           <!-- PDF Download -->
-          @if (api.submissionId()) {
+          <!-- @if (api.submissionId()) {
             <button class="btn btn-primary mt-24" (click)="downloadPdf()">
               T\u00E9l\u00E9charger le certificat PDF \uD83D\uDCC4
             </button>
-          }
+          } -->
 
           <!-- Photos gallery -->
           @if (photos().length > 0) {

@@ -2,160 +2,226 @@ const PDFDocument = require('pdfkit');
 const { DEFAULT_ARTICLES } = require('./data/questions');
 
 /**
- * Generates a Valentine contract PDF with articles, details, and signature.
- * @param {Object} submission - The full submission document
- * @param {Object} config - Tenant config (questions overrides + photos)
- * @returns {PDFDocument} - A readable stream to pipe to the HTTP response
+ * Generates a 2-page Valentine contract PDF:
+ *  - Page 1: Contract articles
+ *  - Page 2: Signatory info + signature
+ *
+ * Hard constraints:
+ *  - Exactly 2 pages (no photos page)
+ *  - Frame (encadré) on both pages
+ *  - Prevent PDFKit “phantom pages” caused by margins overflow
  */
 function generateCertificate(submission, config = {}) {
   const doc = new PDFDocument({
     size: 'A4',
-    margins: { top: 60, bottom: 60, left: 55, right: 55 },
+    // IMPORTANT: margin=0 avoids PDFKit auto page breaks when drawing footer near bottom.
+    // We manage our own layout margins (M).
+    margin: 0,
     autoFirstPage: false,
     info: {
       Title: 'Contrat Officiel de Saint-Valentin',
-      Author: 'Administration du Cupidon \u2014 Guichet N\u00B07',
+      Author: 'Administration du Cupidon — Guichet N°7',
     },
   });
 
-  const { contract, signature, tenant, answers, timestamp } = submission;
-  const photos = config.photos || [];
-  const tenantDisplay = tenant.charAt(0).toUpperCase() + tenant.slice(1);
+  const { contract = {}, signature = '', tenant = 'demo', answers = [], timestamp } = submission || {};
+  const ts = timestamp || new Date().toISOString();
+
+  // config.photos intentionally ignored => exactly 2 pages
+  const tenantDisplay = capitalize(tenant);
   const articles = buildArticles(config.questions || [], tenantDisplay);
 
-  const M = 55;
+  // ===== Page geometry =====
   const PW = 595.28; // A4 width
   const PH = 841.89; // A4 height
+
+  // Content margin inside the frame (your “layout margin”)
+  const M = 55;
   const W = PW - 2 * M;
+
+  // Frame / header / footer constants
   const FOOTER_Y = PH - 45;
+  const CONTENT_TOP = 60;            // safe start (below header rule)
+  const CONTENT_BOTTOM = FOOTER_Y - 28; // keep above footer
 
-  // ===== PAGE 1 : CONTRACT ARTICLES =====
-  doc.addPage();
-  drawPageFrame(doc, M, W, PW, PH, FOOTER_Y);
-
-  // --- Title block ---
-  doc
-    .fontSize(26)
-    .font('Helvetica-Bold')
-    .fillColor('#2b2d42')
-    .text('CONTRAT OFFICIEL', M, 65, { align: 'center', width: W });
-  doc
-    .fontSize(18)
-    .text('DE SAINT-VALENTIN', { align: 'center', width: W });
-
-  doc.moveDown(0.5);
-  drawLine(doc, M + 80, doc.y, W - 160, '#e91e63', 1.5);
-  doc.moveDown(0.7);
-
-  // --- Parties ---
-  doc
-    .fontSize(10)
-    .font('Helvetica')
-    .fillColor('#555')
-    .text('Entre les soussign\u00E9s :', M, doc.y, { width: W });
-  doc.moveDown(0.25);
-  doc
-    .fontSize(10)
-    .font('Helvetica-Bold')
-    .fillColor('#2b2d42')
-    .text('L\u2019Administration du Cupidon', M + 15, doc.y, { continued: true });
-  doc
-    .font('Helvetica')
-    .fillColor('#555')
-    .text(', repr\u00E9sent\u00E9e par le Guichet N\u00B07, ci-apr\u00E8s \u00AB L\u2019Administration \u00BB,');
-  doc.moveDown(0.15);
-  doc
-    .fontSize(10)
-    .font('Helvetica')
-    .fillColor('#555')
-    .text('et', M + 15, doc.y);
-  doc.moveDown(0.15);
-  doc
-    .font('Helvetica-Bold')
-    .fillColor('#2b2d42')
-    .text(`${contract.name || tenantDisplay}`, M + 15, doc.y, { continued: true });
-  doc
-    .font('Helvetica')
-    .fillColor('#555')
-    .text(`, ci-apr\u00E8s \u00AB Le/La Signataire \u00BB,`);
-  doc.moveDown(0.4);
-  doc
-    .fontSize(9.5)
-    .font('Helvetica-Oblique')
-    .fillColor('#555')
-    .text(
-      `Vu les r\u00E9sultats du questionnaire officiel en date du ${formatDate(timestamp)}, les parties conviennent des articles suivants :`,
-      M, doc.y, { width: W }
-    );
-
-  doc.moveDown(0.6);
-  drawLine(doc, M + 20, doc.y, W - 40, '#ffb3c1', 0.5);
-  doc.moveDown(0.5);
-
-  // --- Articles ---
-  articles.forEach((article, i) => {
-    // Check if we need a new page (leave room for article ~55px + footer)
-    if (doc.y > PH - 130) {
-      doc.addPage();
-      drawPageFrame(doc, M, W, PW, PH, FOOTER_Y);
-      doc.y = 60;
-    }
-
-    const num = i + 1;
-    const accepted = answers && answers[i] === true;
-
-    // Article title
-    doc
-      .fontSize(10)
-      .font('Helvetica-Bold')
-      .fillColor('#e91e63')
-      .text(`Article ${num} \u2014 ${article.title}`, M, doc.y, { width: W });
-
-    doc.moveDown(0.1);
-
-    // Article text + verdict on same area
-    doc
-      .fontSize(9)
-      .font('Helvetica')
-      .fillColor('#2b2d42')
-      .text(`\u00AB ${article.text} \u00BB`, M + 12, doc.y, { width: W - 110, continued: false });
-
-    // Verdict badge - draw at the right side, aligned with the article text
-    const verdictY = doc.y - 12;
-    const verdict = accepted ? 'ACCEPT\u00C9' : 'REFUS\u00C9';
-    const badgeColor = accepted ? '#2e7d32' : '#c62828';
-    const badgeBg = accepted ? '#e8f5e9' : '#ffebee';
-
-    // Badge background
-    const badgeX = M + W - 72;
-    doc
-      .save()
-      .roundedRect(badgeX, verdictY - 1, 68, 14, 3)
-      .fillColor(badgeBg)
-      .fill()
-      .restore();
-    doc
-      .save()
-      .roundedRect(badgeX, verdictY - 1, 68, 14, 3)
-      .lineWidth(0.5)
-      .strokeColor(badgeColor)
-      .stroke()
-      .restore();
-    doc
-      .fontSize(7.5)
-      .font('Helvetica-Bold')
-      .fillColor(badgeColor)
-      .text(verdict, badgeX, verdictY + 1, { width: 68, align: 'center' });
-
-    doc.moveDown(0.25);
+  // ===== PAGE 1 : CONTRACT =====
+  addFramedPage(doc, { M, W, PW, PH, FOOTER_Y, CONTENT_TOP });
+  renderContractPage(doc, {
+    M,
+    W,
+    PH,
+    CONTENT_BOTTOM,
+    tenantDisplay,
+    contract,
+    ts,
+    articles,
+    answers,
   });
 
   // ===== PAGE 2 : DETAILS + SIGNATURE =====
-  doc.addPage();
+  addFramedPage(doc, { M, W, PW, PH, FOOTER_Y, CONTENT_TOP });
+  renderDetailsAndSignaturePage(doc, {
+    M,
+    W,
+    PH,
+    FOOTER_Y,
+    CONTENT_BOTTOM,
+    tenantDisplay,
+    contract,
+    signature,
+    ts,
+  });
+
+  doc.end();
+  return doc;
+}
+
+// ───────────────────────────────────────────────────────────────
+// Page builders
+// ───────────────────────────────────────────────────────────────
+
+function addFramedPage(doc, { M, W, PW, PH, FOOTER_Y, CONTENT_TOP }) {
+  doc.addPage({ size: 'A4', margin: 0 });
+
+  // Draw frame + header + footer (and DO NOT let it alter flow position)
   drawPageFrame(doc, M, W, PW, PH, FOOTER_Y);
+
+  // Reset flow cursor for content
+  doc.x = M;
+  doc.y = CONTENT_TOP;
+}
+
+function renderContractPage(doc, ctx) {
+  const { M, W, PH, CONTENT_BOTTOM, tenantDisplay, contract, ts, articles, answers } = ctx;
+
+  // Title block
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(24)
+    .fillColor('#2b2d42')
+    .text('CONTRAT OFFICIEL', M, 70, { align: 'center', width: W });
+
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(16)
+    .fillColor('#2b2d42')
+    .text('DE SAINT-VALENTIN', { align: 'center', width: W });
+
+  doc.moveDown(0.45);
+  drawLine(doc, M + 80, doc.y, W - 160, '#e91e63', 1.5);
+  doc.moveDown(0.55);
+
+  // Meta
+  const signName = sanitizeForPdf(contract.name || tenantDisplay);
+  doc
+    .font('Helvetica')
+    .fontSize(9.5)
+    .fillColor('#555')
+    .text(`Dossier ouvert au nom de : `, M, doc.y, { continued: true, width: W });
+
+  doc
+    .font('Helvetica-Bold')
+    .fillColor('#2b2d42')
+    .text(signName, { continued: false });
+
+  doc
+    .font('Helvetica-Oblique')
+    .fontSize(8.5)
+    .fillColor('#777')
+    .text(`Fait le ${formatDate(ts)} — Version imprimable`, M, doc.y + 2, { width: W });
+
+  doc.moveDown(0.55);
+  drawLine(doc, M + 20, doc.y, W - 40, '#ffb3c1', 0.6);
+  doc.moveDown(0.55);
+
+  // Articles typography presets (adaptive if needed)
+  const preset = pickContractPreset(doc, {
+    M,
+    W,
+    CONTENT_BOTTOM,
+    startY: doc.y,
+    articles,
+  });
+
+  const badgeW = preset.badgeW;
+  const badgeH = preset.badgeH;
+  const badgeX = M + W - badgeW;
+
+  // Layout widths
+  const textX = M + 12;
+  const textW = W - badgeW - 18; // leave room for badge + gap
+
+  doc.lineGap(0);
+
+  for (let i = 0; i < articles.length; i++) {
+    const a = articles[i];
+    const accepted = answers && answers[i] === true;
+
+    // If we are near the bottom (shouldn’t happen with preset selection), clamp (no new pages allowed)
+    if (doc.y > CONTENT_BOTTOM - 22) break;
+
+    // Article title
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(preset.titleFs)
+      .fillColor('#e91e63')
+      .text(`Article ${i + 1} — ${sanitizeForPdf(a.title)}`, M, doc.y, { width: W });
+
+    doc.y += preset.titleGap;
+
+    const textY = doc.y;
+
+    // Article text (height-clamped to avoid any auto page add)
+    doc
+      .font('Helvetica')
+      .fontSize(preset.textFs)
+      .fillColor('#2b2d42');
+
+    const remainingH = Math.max(0, CONTENT_BOTTOM - textY);
+    doc.text(`« ${sanitizeForPdf(a.text)} »`, textX, textY, {
+      width: textW,
+      height: remainingH,
+      align: 'left',
+    });
+
+    const afterTextY = doc.y;
+    const blockH = Math.max(afterTextY - textY, badgeH);
+
+    // Verdict badge (top-aligned with article text)
+    drawVerdictBadge(doc, {
+      x: badgeX,
+      y: textY + 1,
+      w: badgeW,
+      h: badgeH,
+      accepted,
+    });
+
+    doc.y = textY + blockH + preset.afterGap;
+  }
+
+  // Optional small end note if overflow clipped (keeps 2 pages requirement)
+  if (doc.y > CONTENT_BOTTOM - 18) {
+    doc
+      .font('Helvetica-Oblique')
+      .fontSize(7)
+      .fillColor('#999')
+      .text('NB : Mise en page compactée pour tenir sur une page (exigence administrative du Guichet N°7).', M, CONTENT_BOTTOM - 12, {
+        width: W,
+        align: 'center',
+        height: 12,
+      });
+  }
+
+  // Restore defaults
+  doc.lineGap(0);
+}
+
+function renderDetailsAndSignaturePage(doc, ctx) {
+  const { M, W, PH, FOOTER_Y, CONTENT_BOTTOM, tenantDisplay, contract, signature, ts } = ctx;
+
   doc.y = 65;
 
-  // --- Section title ---
+  // Title
   doc
     .fontSize(18)
     .font('Helvetica-Bold')
@@ -166,57 +232,81 @@ function generateCertificate(submission, config = {}) {
   drawLine(doc, M + 80, doc.y, W - 160, '#e91e63', 1.5);
   doc.moveDown(0.8);
 
-  // --- Details table ---
+  // Details table
   const col1 = M + 12;
   const col2 = M + 165;
-  const colW = W - (col2 - M) - 15;
+  const valueW = W - (col2 - M) - 15;
 
-  drawDetailRow(doc, col1, col2, doc.y, 'Signataire', `${contract.name || tenantDisplay}${contract.nickname ? ` (${contract.nickname})` : ''}`, W, colW);
+  // Row 1
+  drawDetailRow(
+    doc,
+    col1,
+    col2,
+    doc.y,
+    'Signataire',
+    `${sanitizeForPdf(contract.name || tenantDisplay)}${contract.nickname ? ` (${sanitizeForPdf(contract.nickname)})` : ''}`,
+    W,
+    valueW
+  );
   doc.y += 30;
 
-  const lvl = contract.romanticLevel || 3;
-  const romanticDisplay = `${lvl}/5   ` + '\u25CF '.repeat(lvl) + '\u25CB '.repeat(5 - lvl);
-  drawDetailRow(doc, col1, col2, doc.y, 'Niveau de romantisme', romanticDisplay, W, colW);
+  // Row 2: romantic level (render dots as shapes to avoid emoji/font issues)
+  const lvl = clampInt(contract.romanticLevel ?? 3, 1, 5);
+  drawDetailRow(doc, col1, col2, doc.y, 'Niveau de romantisme', `${lvl}/5`, W, valueW);
+  drawRatingDots(doc, {
+    x: col2 + 42,
+    y: doc.y + 13,
+    level: lvl,
+  });
   doc.y += 30;
 
-  drawDetailRow(doc, col1, col2, doc.y, 'Tampon officiel', contract.stamp || 'N/A', W, colW);
+  // Row 3: stamp (emoji-safe normalization)
+  const stamp = sanitizeForPdf(contract.stamp || 'N/A');
+  drawDetailRow(doc, col1, col2, doc.y, 'Tampon officiel', stamp, W, valueW);
   doc.y += 30;
 
+  // Row 4: bonuses
   const bonuses = [];
   if (contract.bonusCompliment) bonuses.push('Compliment gratuit');
-  if (contract.bonusSurprise) bonuses.push('Surprise (mod\u00E9r\u00E9e)');
+  if (contract.bonusSurprise) bonuses.push('Surprise (modérée)');
   if (contract.bonusDate) bonuses.push('Mini date');
-  drawDetailRow(doc, col1, col2, doc.y, 'Clauses bonus', bonuses.length > 0 ? bonuses.join(', ') : 'Aucune', W, colW);
+  drawDetailRow(
+    doc,
+    col1,
+    col2,
+    doc.y,
+    'Clauses bonus',
+    sanitizeForPdf(bonuses.length > 0 ? bonuses.join(', ') : 'Aucune'),
+    W,
+    valueW
+  );
   doc.y += 40;
 
   drawLine(doc, M + 20, doc.y, W - 40, '#ffb3c1', 0.5);
   doc.y += 20;
 
-  // --- Signature section ---
+  // Signature section
   doc
     .fontSize(13)
     .font('Helvetica-Bold')
     .fillColor('#2b2d42')
     .text('SIGNATURE', M, doc.y, { width: W });
+
   doc.moveDown(0.25);
   doc
     .fontSize(8.5)
     .font('Helvetica')
     .fillColor('#888')
-    .text('Le/La Signataire atteste avoir r\u00E9pondu librement\u00B9 \u00E0 l\u2019ensemble du questionnaire.', M, doc.y, { width: W });
+    .text('Le/La Signataire atteste avoir répondu librement¹ à l’ensemble du questionnaire.', M, doc.y, { width: W });
+
   doc.moveDown(0.7);
 
   const sigAreaY = doc.y;
   const sigBoxW = 230;
   const sigBoxH = signature && signature.startsWith('data:image') ? 100 : 50;
 
-  // --- Left column: Signature ---
-  doc
-    .fontSize(8)
-    .font('Helvetica')
-    .fillColor('#888')
-    .text('Signature :', M, sigAreaY);
-
+  // Left: signature
+  doc.fontSize(8).font('Helvetica').fillColor('#888').text('Signature :', M, sigAreaY);
   const sigBoxY = sigAreaY + 14;
 
   doc
@@ -237,22 +327,15 @@ function generateCertificate(submission, config = {}) {
         .text('[Signature]', M + 10, sigBoxY + 18);
     }
   } else if (signature && signature.startsWith('text:')) {
-    doc
-      .fontSize(15)
-      .font('Helvetica-Oblique')
-      .fillColor('#2b2d42')
-      .text(signature.slice(5), M + 14, sigBoxY + 15);
+    doc.fontSize(15).font('Helvetica-Oblique').fillColor('#2b2d42')
+      .text(sanitizeForPdf(signature.slice(5)), M + 14, sigBoxY + 15, { width: sigBoxW - 28, height: sigBoxH - 20 });
   }
 
-  // --- Right column: Stamp + Date ---
+  // Right: stamp + date
   const rightX = M + sigBoxW + 25;
   const stampBoxW = W - sigBoxW - 25;
 
-  doc
-    .fontSize(8)
-    .font('Helvetica')
-    .fillColor('#888')
-    .text('Tampon officiel :', rightX, sigAreaY);
+  doc.fontSize(8).font('Helvetica').fillColor('#888').text('Tampon officiel :', rightX, sigAreaY);
 
   const stampBoxY = sigAreaY + 14;
   doc
@@ -266,127 +349,105 @@ function generateCertificate(submission, config = {}) {
     .fontSize(14)
     .font('Helvetica-Bold')
     .fillColor('#e91e63')
-    .text(contract.stamp || '', rightX, stampBoxY + 18, { width: stampBoxW, align: 'center' });
+    .text(stamp, rightX, stampBoxY + 18, { width: stampBoxW, align: 'center', height: 20 });
 
-  // Date
   const dateY = stampBoxY + 65;
   doc
     .fontSize(9)
     .font('Helvetica')
     .fillColor('#2b2d42')
-    .text(`Fait le ${formatDate(timestamp)}`, rightX, dateY, { width: stampBoxW, align: 'center' });
+    .text(`Fait le ${formatDate(ts)}`, rightX, dateY, { width: stampBoxW, align: 'center', height: 14 });
 
-  // --- Footnote (absolute position, well above footer) ---
-  const footnoteY = Math.max(sigBoxY + sigBoxH + 25, dateY + 25);
+  // Footnote (kept above footer)
+  const footnoteY = Math.min(
+    Math.max(sigBoxY + sigBoxH + 25, dateY + 25),
+    CONTENT_BOTTOM - 18
+  );
+
   doc
     .fontSize(6.5)
     .font('Helvetica-Oblique')
     .fillColor('#bbb')
     .text(
-      '\u00B9 Selon la d\u00E9finition administrative en vigueur au Guichet N\u00B07, o\u00F9 \u00AB librement \u00BB signifie \u00AB avec un sourire forc\u00E9 mais sinc\u00E8re \u00BB.',
-      M, footnoteY, { width: W }
+      '¹ Selon la définition administrative en vigueur au Guichet N°7, où « librement » signifie « avec un sourire forcé mais sincère ».',
+      M,
+      footnoteY,
+      { width: W, height: 24 }
     );
-
-  // ===== PHOTOS PAGE (optional) =====
-  if (photos.length > 0) {
-    doc.addPage();
-    drawPageFrame(doc, M, W, PW, PH, FOOTER_Y);
-    doc.y = 65;
-
-    doc
-      .fontSize(18)
-      .font('Helvetica-Bold')
-      .fillColor('#2b2d42')
-      .text('ANNEXE \u2014 ALBUM PHOTO', M, doc.y, { align: 'center', width: W });
-
-    doc.moveDown(0.4);
-    drawLine(doc, M + 80, doc.y, W - 160, '#e91e63', 1.5);
-    doc.moveDown(0.8);
-
-    const photoW = (W - 20) / 2;
-    const photoH = 220;
-    let col = 0;
-    let curY = doc.y;
-
-    photos.forEach((photo) => {
-      try {
-        const data = photo.replace(/^data:image\/[^;]+;base64,/, '');
-        const buf = Buffer.from(data, 'base64');
-        const x = M + col * (photoW + 20);
-
-        doc
-          .save()
-          .roundedRect(x - 2, curY - 2, photoW + 4, photoH + 4, 4)
-          .lineWidth(1.5)
-          .strokeColor('#ff8fa3')
-          .stroke()
-          .restore();
-
-        doc.image(buf, x, curY, {
-          fit: [photoW, photoH],
-          align: 'center',
-          valign: 'center',
-        });
-
-        col++;
-        if (col >= 2) {
-          col = 0;
-          curY += photoH + 25;
-          if (curY + photoH > PH - 80) {
-            doc.addPage();
-            drawPageFrame(doc, M, W, PW, PH, FOOTER_Y);
-            curY = 60;
-          }
-        }
-      } catch (_) { /* skip invalid photo */ }
-    });
-  }
-
-  doc.end();
-  return doc;
 }
 
-// ───────────────── Helpers ─────────────────
+// ───────────────────────────────────────────────────────────────
+// Helpers
+// ───────────────────────────────────────────────────────────────
 
 function buildArticles(configQuestions, tenantName) {
+  const tn = sanitizeForPdf(tenantName);
   return DEFAULT_ARTICLES.map((defaultArt) => {
     const override = configQuestions.find((q) => q.id === defaultArt.id);
-    const text = (override?.variants?.[0]?.text || defaultArt.text)
-      .replace(/\{prenom\}/gi, tenantName)
-      .replace(/\n/g, ' ');
-    return { title: defaultArt.title, text };
+
+    const raw = (override?.variants?.[0]?.text || defaultArt.text);
+    const text = sanitizeForPdf(
+      String(raw)
+        .replace(/\{prenom\}/gi, tn)
+        .replace(/\n/g, ' ')
+        .trim()
+    );
+
+    return { title: sanitizeForPdf(defaultArt.title), text };
   });
 }
 
 /**
- * Draws border + header + footer on the current page (all non-flowing elements).
+ * Draws border + header + footer on the current page.
+ * IMPORTANT: we preserve doc.x/doc.y so it doesn't mess with flow.
  */
 function drawPageFrame(doc, margin, width, pageW, pageH, footerY) {
+  const prevX = doc.x;
+  const prevY = doc.y;
+
   // Double border
   const m = 20;
-  doc.save()
-    .lineWidth(2).strokeColor('#e91e63')
-    .rect(m, m, pageW - 2 * m, pageH - 2 * m).stroke()
-    .lineWidth(0.5).strokeColor('#ffb3c1')
-    .rect(m + 4, m + 4, pageW - 2 * m - 8, pageH - 2 * m - 8).stroke()
-    .restore();
+  doc.save();
+  doc.lineWidth(2).strokeColor('#e91e63')
+    .rect(m, m, pageW - 2 * m, pageH - 2 * m).stroke();
+  doc.lineWidth(0.5).strokeColor('#ffb3c1')
+    .rect(m + 4, m + 4, pageW - 2 * m - 8, pageH - 2 * m - 8).stroke();
+  doc.restore();
 
   // Header
-  doc.save()
-    .fontSize(7.5).font('Helvetica').fillColor('#e91e63')
-    .text('ADMINISTRATION DU CUPIDON \u2014 GUICHET N\u00B07', margin, 30, { align: 'center', width })
-    .moveTo(margin + 100, 42).lineTo(margin + width - 100, 42)
-    .lineWidth(0.3).strokeColor('#ffb3c1').stroke()
-    .restore();
+  doc.save();
+  doc.fontSize(7.5).font('Helvetica').fillColor('#e91e63')
+    .text('ADMINISTRATION DU CUPIDON — GUICHET N°7', margin, 30, {
+      align: 'center',
+      width,
+      height: 10,        // clamp => never triggers auto page creation
+      ellipsis: true,
+      lineBreak: false,
+    });
+  doc.moveTo(margin + 100, 42).lineTo(margin + width - 100, 42)
+    .lineWidth(0.3).strokeColor('#ffb3c1').stroke();
+  doc.restore();
 
-  // Footer (drawn immediately, absolute Y, no text flow issues)
-  doc.save()
-    .fontSize(6.5).font('Helvetica').fillColor('#ccc')
+  // Footer (height clamped to avoid any pagination side-effects)
+  doc.save();
+  doc.fontSize(6.5).font('Helvetica').fillColor('#ccc')
     .text(
-      'Document officiel \u00E9mis par l\u2019Administration du Cupidon \u2014 Guichet N\u00B07 \u2014 Toute falsification sera punie de 100 bisous suppl\u00E9mentaires.',
-      margin, footerY, { align: 'center', width, lineBreak: false }
-    )
-    .restore();
+      'Document officiel émis par l’Administration du Cupidon — Guichet N°7 — Toute falsification sera punie de 100 bisous supplémentaires.',
+      margin,
+      footerY,
+      {
+        align: 'center',
+        width,
+        height: 10,      // clamp
+        ellipsis: true,
+        lineBreak: false,
+      }
+    );
+  doc.restore();
+
+  // Restore cursor
+  doc.x = prevX;
+  doc.y = prevY;
 }
 
 function drawLine(doc, x, y, width, color, lineW) {
@@ -410,21 +471,139 @@ function drawDetailRow(doc, labelX, valueX, y, label, value, totalW, valueW) {
     .restore();
 
   doc.fontSize(9.5).font('Helvetica-Bold').fillColor('#555')
-    .text(label, labelX, y + 4);
+    .text(label, labelX, y + 4, { height: 14 });
+
   doc.fontSize(9.5).font('Helvetica').fillColor('#2b2d42')
-    .text(value, valueX, y + 4, { width: valueW });
+    .text(value, valueX, y + 4, { width: valueW, height: 14, ellipsis: true });
+}
+
+function drawVerdictBadge(doc, { x, y, w, h, accepted }) {
+  const verdict = accepted ? 'ACCEPTÉ' : 'REFUSÉ';
+  const badgeColor = accepted ? '#2e7d32' : '#c62828';
+  const badgeBg = accepted ? '#e8f5e9' : '#ffebee';
+
+  doc.save()
+    .roundedRect(x, y, w, h, 3)
+    .fillColor(badgeBg)
+    .fill()
+    .roundedRect(x, y, w, h, 3)
+    .lineWidth(0.5)
+    .strokeColor(badgeColor)
+    .stroke()
+    .restore();
+
+  doc.fontSize(7.2).font('Helvetica-Bold').fillColor(badgeColor)
+    .text(verdict, x, y + 2, { width: w, align: 'center', height: h });
+}
+
+/**
+ * Dots rating rendered as vector shapes (no emoji/font dependency).
+ */
+function drawRatingDots(doc, { x, y, level }) {
+  const r = 2.2;
+  const gap = 6.4;
+
+  for (let i = 1; i <= 5; i++) {
+    const cx = x + (i - 1) * gap;
+    doc.save();
+    doc.circle(cx, y, r);
+    if (i <= level) {
+      doc.fillColor('#e91e63').fill();
+    } else {
+      doc.lineWidth(0.7).strokeColor('#ffb3c1').stroke();
+    }
+    doc.restore();
+  }
+}
+
+function pickContractPreset(doc, { M, W, CONTENT_BOTTOM, startY, articles }) {
+  const presets = [
+    { titleFs: 10, textFs: 9, titleGap: 2, afterGap: 8, badgeW: 68, badgeH: 14 },
+    { titleFs: 9.2, textFs: 8.4, titleGap: 2, afterGap: 7, badgeW: 66, badgeH: 13 },
+    { titleFs: 8.8, textFs: 8.0, titleGap: 1.5, afterGap: 6, badgeW: 64, badgeH: 12 },
+  ];
+
+  const available = Math.max(0, CONTENT_BOTTOM - startY);
+  const textW = W - presets[0].badgeW - 18;
+
+  for (const p of presets) {
+    const fits = measureArticlesHeight(doc, { p, articles, W, textW }) <= available;
+    if (fits) return p;
+  }
+
+  // Fallback to most compact
+  return presets[presets.length - 1];
+}
+
+function measureArticlesHeight(doc, { p, articles, W, textW }) {
+  // We use PDFKit measurement with current fonts; ensure we set fonts before measuring.
+  let total = 0;
+
+  for (let i = 0; i < articles.length; i++) {
+    // Title height
+    doc.font('Helvetica-Bold').fontSize(p.titleFs);
+    const th = doc.heightOfString(`Article ${i + 1} — ${articles[i].title}`, { width: W });
+
+    // Text height
+    doc.font('Helvetica').fontSize(p.textFs);
+    const tx = doc.heightOfString(`« ${articles[i].text} »`, { width: textW });
+
+    const block = th + p.titleGap + Math.max(tx, p.badgeH) + p.afterGap;
+    total += block;
+  }
+
+  return total;
 }
 
 function formatDate(timestamp) {
   try {
     return new Date(timestamp).toLocaleDateString('fr-FR', {
-      day: 'numeric', month: 'long', year: 'numeric',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
     });
   } catch (_) {
     return new Date().toLocaleDateString('fr-FR', {
-      day: 'numeric', month: 'long', year: 'numeric',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
     });
   }
+}
+
+/**
+ * Best-effort “emoji-safe” sanitizer:
+ * - Keeps your already-working emojis if supported
+ * - Normalizes common heart emojis to "♥" (works with Helvetica)
+ * - Removes variation selectors that often break rendering
+ * - Strips control chars
+ */
+function sanitizeForPdf(input) {
+  let s = input === null || input === undefined ? '' : String(input);
+
+  // Remove variation selectors (often causes tofu / weird glyph substitution)
+  s = s.replace(/\uFE0F/g, '');
+
+  // Normalize common hearts to a safe glyph
+  const heartLike = /[❤♥💖💘💝💕💗💓💞💟]/gu;
+  s = s.replace(heartLike, '♥');
+
+  // Strip ASCII control chars (except \n, \t which we don't expect anyway)
+  s = s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+
+  return s.trim();
+}
+
+function capitalize(str) {
+  const s = String(str || '').trim();
+  if (!s) return 'Demo';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function clampInt(v, min, max) {
+  const n = Number.parseInt(v, 10);
+  if (Number.isNaN(n)) return min;
+  return Math.max(min, Math.min(max, n));
 }
 
 module.exports = { generateCertificate };

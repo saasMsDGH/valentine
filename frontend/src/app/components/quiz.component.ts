@@ -100,7 +100,7 @@ export class QuizComponent {
     this.quiz.answerYes();
 
     if (this.quiz.isComplete()) {
-      setTimeout(() => this.router.navigate(['/contract']), 400);
+      setTimeout(() => this.router.navigate(['/contract']), 600);
     }
   }
 
@@ -118,11 +118,11 @@ export class QuizComponent {
 
   private flashValid(): void {
     this.showValid.set(true);
-    setTimeout(() => this.showValid.set(false), 350);
+    setTimeout(() => this.showValid.set(false), 450);
   }
 
   private triggerShake(): void {
     this.shaking.set(true);
-    setTimeout(() => this.shaking.set(false), 450);
+    setTimeout(() => this.shaking.set(false), 550);
   }
 }
